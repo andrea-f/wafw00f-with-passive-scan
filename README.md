@@ -248,6 +248,13 @@ $   wafw00f https://example.org
 [~] Number of requests: 2
 ```
 
+## Passive scan
+
+Added (26/05/2022) an environment variable to disable all active scans and only perform the generic one.
+Passive scan mostly detects whether a url is using a WAF or not.
+Setting the string environment variable: `DISABLE_ACTIVE_FINGERPRINTING_SCANS` to `True` disables all active scans and only performs a passive scan. Default to `False`.
+To set run: `export DISABLE_ACTIVE_FINGERPRINTING_SCANS=False`, then run a scan.
+
 ## How do I install it?
 
 The following should do the trick:

@@ -24,13 +24,27 @@ from wafw00f.wafprio import wafdetectionsprio
 from wafw00f.lib.evillib import urlParser, waftoolsengine, def_headers
 
 
+# Only performs a passive (no possibly malicious code) fingerprinting scan of the target
+DISABLE_ACTIVE_FINGERPRINTING_SCANS = os.getenv("DISABLE_ACTIVE_FINGERPRINTING_SCANS", "False")
+if DISABLE_ACTIVE_FINGERPRINTING_SCANS == "False":
+    DISABLE_ACTIVE_FINGERPRINTING_SCANS = False
+elif DISABLE_ACTIVE_FINGERPRINTING_SCANS == "True":
+    DISABLE_ACTIVE_FINGERPRINTING_SCANS = True
+
 class WAFW00F(waftoolsengine):
 
-    xsstring = '<script>alert("XSS");</script>'
-    sqlistring = "UNION SELECT ALL FROM information_schema AND ' or SLEEP(5) or '"
-    lfistring = '../../../../etc/passwd'
-    rcestring = '/bin/cat /etc/passwd; ping 127.0.0.1; curl google.com'
-    xxestring = '<!ENTITY xxe SYSTEM "file:///etc/shadow">]><pwn>&hack;</pwn>'
+    if DISABLE_ACTIVE_FINGERPRINTING_SCANS is False:
+        xsstring = '<script>alert("XSS");</script>'
+        sqlistring = "UNION SELECT ALL FROM information_schema AND ' or SLEEP(5) or '"
+        lfistring = '../../../../etc/passwd'
+        rcestring = '/bin/cat /etc/passwd; ping 127.0.0.1; curl google.com'
+        xxestring = '<!ENTITY xxe SYSTEM "file:///etc/shadow">]><pwn>&hack;</pwn>'
+    else:
+        xsstring = ''
+        sqlistring = ""
+        lfistring = ''
+        rcestring = ''
+        xxestring = ''
 
     def __init__(self, target='www.example.com', debuglevel=0, path='/',
                  followredirect=True, extraheaders={}, proxies=None):
@@ -85,7 +99,7 @@ class WAFW00F(waftoolsengine):
                    'The server returns a different response code when an attack string is used.',
                    'It closed the connection for a normal request.',
                    'The response was different when the request wasn\'t made from a browser.'
-                ]
+                   ]
         try:
             # Testing for no user-agent response. Detects almost all WAFs out there.
             resp1 = self.performCheck(self.normalRequest)
@@ -102,44 +116,45 @@ class WAFW00F(waftoolsengine):
                     self.knowledge['generic']['reason'] = reason
                     self.knowledge['generic']['found'] = True
                     return True
+            if DISABLE_ACTIVE_FINGERPRINTING_SCANS is False:
+                # Testing the status code upon sending a xss attack
+                resp2 = self.performCheck(self.xssAttack)
+                if resp1.status_code != resp2.status_code:
+                    self.log.info('Server returned a different response when a XSS attack vector was tried.')
+                    reason = reasons[2]
+                    reason += '\r\n'
+                    reason += 'Normal response code is "%s",' % resp1.status_code
+                    reason += ' while the response code to cross-site scripting attack is "%s"' % resp2.status_code
+                    self.knowledge['generic']['reason'] = reason
+                    self.knowledge['generic']['found'] = True
+                    return True
 
-            # Testing the status code upon sending a xss attack
-            resp2 = self.performCheck(self.xssAttack)
-            if resp1.status_code != resp2.status_code:
-                self.log.info('Server returned a different response when a XSS attack vector was tried.')
-                reason = reasons[2]
-                reason += '\r\n'
-                reason += 'Normal response code is "%s",' % resp1.status_code
-                reason += ' while the response code to cross-site scripting attack is "%s"' % resp2.status_code
-                self.knowledge['generic']['reason'] = reason
-                self.knowledge['generic']['found'] = True
-                return True
+                # Testing the status code upon sending a lfi attack
+                resp2 = self.performCheck(self.lfiAttack)
+                if resp1.status_code != resp2.status_code:
+                    self.log.info('Server returned a different response when a directory traversal was attempted.')
+                    reason = reasons[2]
+                    reason += '\r\n'
+                    reason += 'Normal response code is "%s",' % resp1.status_code
+                    reason += ' while the response code to a file inclusion attack is "%s"' % resp2.status_code
+                    self.knowledge['generic']['reason'] = reason
+                    self.knowledge['generic']['found'] = True
+                    return True
 
-            # Testing the status code upon sending a lfi attack
-            resp2 = self.performCheck(self.lfiAttack)
-            if resp1.status_code != resp2.status_code:
-                self.log.info('Server returned a different response when a directory traversal was attempted.')
-                reason = reasons[2]
-                reason += '\r\n'
-                reason += 'Normal response code is "%s",' % resp1.status_code
-                reason += ' while the response code to a file inclusion attack is "%s"' % resp2.status_code
-                self.knowledge['generic']['reason'] = reason
-                self.knowledge['generic']['found'] = True
-                return True
+                # Testing the status code upon sending a sqli attack
+                resp2 = self.performCheck(self.sqliAttack)
+                if resp1.status_code != resp2.status_code:
+                    self.log.info('Server returned a different response when a SQLi was attempted.')
+                    reason = reasons[2]
+                    reason += '\r\n'
+                    reason += 'Normal response code is "%s",' % resp1.status_code
+                    reason += ' while the response code to a SQL injection attack is "%s"' % resp2.status_code
+                    self.knowledge['generic']['reason'] = reason
+                    self.knowledge['generic']['found'] = True
+                    return True
 
-            # Testing the status code upon sending a sqli attack
-            resp2 = self.performCheck(self.sqliAttack)
-            if resp1.status_code != resp2.status_code:
-                self.log.info('Server returned a different response when a SQLi was attempted.')
-                reason = reasons[2]
-                reason += '\r\n'
-                reason += 'Normal response code is "%s",' % resp1.status_code
-                reason += ' while the response code to a SQL injection attack is "%s"' % resp2.status_code
-                self.knowledge['generic']['reason'] = reason
-                self.knowledge['generic']['found'] = True
-                return True
-
-            # Checking for the Server header after sending malicious requests
+            # Checking for the Server header after sending
+            # ( a possibly malicious if DISABLE_ACTIVE_FINGERPRINTING_SCANS is False) requests
             normalserver, attackresponse_server = '', ''
             response = self.attackres
             if 'server' in resp1.headers:
@@ -425,8 +440,8 @@ def main():
                 "https": options.proxy,
             }
         attacker = WAFW00F(target, debuglevel=options.verbose, path=path,
-                    followredirect=options.followredirect, extraheaders=extraheaders,
-                        proxies=proxies)
+                           followredirect=options.followredirect, extraheaders=extraheaders,
+                           proxies=proxies)
         if attacker.rq is None:
             log.error('Site %s appears to be down' % hostname)
             continue
@@ -467,7 +482,7 @@ def main():
                 json.dump(results, sys.stdout, indent=2)
             elif options.format == 'csv':
                 csvwriter = csv.writer(sys.stdout, delimiter=',', quotechar='"',
-                    quoting=csv.QUOTE_MINIMAL)
+                                       quoting=csv.QUOTE_MINIMAL)
                 count = 0
                 for result in results:
                     if count == 0:
@@ -485,7 +500,7 @@ def main():
             log.debug("Exporting data in csv format to file: %s" % (options.output))
             with open(options.output, 'w') as outfile:
                 csvwriter = csv.writer(outfile, delimiter=',', quotechar='"',
-                    quoting=csv.QUOTE_MINIMAL)
+                                       quoting=csv.QUOTE_MINIMAL)
                 count = 0
                 for result in results:
                     if count == 0:
@@ -501,7 +516,7 @@ def main():
             elif options.format == 'csv':
                 with open(options.output, 'w') as outfile:
                     csvwriter = csv.writer(outfile, delimiter=',', quotechar='"',
-                        quoting=csv.QUOTE_MINIMAL)
+                                           quoting=csv.QUOTE_MINIMAL)
                     count = 0
                     for result in results:
                         if count == 0:
